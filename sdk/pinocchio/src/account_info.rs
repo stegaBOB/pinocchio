@@ -1,6 +1,7 @@
 //! Data structures to represent account information.
 
 use core::{
+    convert::Infallible,
     marker::PhantomData,
     mem::ManuallyDrop,
     ptr::{write, NonNull},
@@ -18,7 +19,7 @@ pub const MAX_PERMITTED_DATA_INCREASE: usize = 1_024 * 10;
 
 /// Represents masks for borrow state of an account.
 #[repr(u8)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum BorrowState {
     /// Mask to check whether an account is already borrowed.
     ///
@@ -112,7 +113,7 @@ pub(crate) struct Account {
 /// used to track borrows of the account data and lamports, given that an
 /// account can be "shared" across multiple `AccountInfo` instances.
 #[repr(C)]
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct AccountInfo {
     /// Raw (pointer to) account data.
     ///
@@ -495,6 +496,25 @@ impl AccountInfo {
         // Check wheather the account data is already borrowed.
         self.can_borrow_mut_data()?;
 
+        // SAFETY:
+        // We are checking if the account data is already borrowed, so we are safe to call
+        unsafe {
+            self.resize_unchecked(new_len)?;
+        }
+
+        Ok(())
+    }
+
+    /// Resizes the account's data and udpates the resize delta without checking if the account is already borrowed.
+    ///
+    /// The account data can be increased by up to [`MAX_PERMITTED_DATA_INCREASE`] bytes
+    ///
+    /// # Safety
+    ///
+    /// This method is unsafe because it does not check if the account data is already
+    /// borrowed.
+    #[inline(always)]
+    pub unsafe fn resize_unchecked(&self, new_len: usize) -> Result<(), ProgramError> {
         // Account length is always `< i32::MAX`...
         let current_len = self.data_len() as i32;
         // ...so the new length must fit in an `i32`.
@@ -627,6 +647,7 @@ const LAMPORTS_BORROW_SHIFT: u8 = 4;
 const DATA_BORROW_SHIFT: u8 = 0;
 
 /// Reference to account data or lamports with checked borrow rules.
+#[derive(Debug)]
 pub struct Ref<'a, T: ?Sized> {
     value: NonNull<T>,
     state: NonNull<u8>,
@@ -645,15 +666,24 @@ impl<'a, T: ?Sized> Ref<'a, T> {
     where
         F: FnOnce(&T) -> &U,
     {
+        Self::try_map::<_, _, Infallible>(orig, |x| Ok(f(x))).unwrap()
+    }
+
+    /// Maps a reference to a new type in a fallible map, returning an error if the map fails.
+    #[inline]
+    pub fn try_map<U: ?Sized, F, E>(orig: Ref<'a, T>, f: F) -> Result<Ref<'a, U>, E>
+    where
+        F: FnOnce(&T) -> Result<&U, E>,
+    {
         // Avoid decrementing the borrow flag on Drop.
         let orig = ManuallyDrop::new(orig);
 
-        Ref {
-            value: NonNull::from(f(&*orig)),
+        Ok(Ref {
+            value: NonNull::from(f(&*orig)?),
             state: orig.state,
             borrow_shift: orig.borrow_shift,
             marker: PhantomData,
-        }
+        })
     }
 
     /// Filters and maps a reference to a new type.
@@ -698,6 +728,7 @@ const LAMPORTS_MUTABLE_BORROW_BITMASK: u8 = 0b_1000_0000;
 const DATA_MUTABLE_BORROW_BITMASK: u8 = 0b_0000_1000;
 
 /// Mutable reference to account data or lamports with checked borrow rules.
+#[derive(Debug)]
 pub struct RefMut<'a, T: ?Sized> {
     value: NonNull<T>,
     state: NonNull<u8>,
@@ -716,15 +747,25 @@ impl<'a, T: ?Sized> RefMut<'a, T> {
     where
         F: FnOnce(&mut T) -> &mut U,
     {
+        Self::try_map::<_, _, Infallible>(orig, |x| Ok(f(x))).unwrap()
+    }
+
+    /// Maps a mutable reference to a new type in a fallible map, returning an error if the map fails.
+    #[inline]
+    pub fn try_map<U: ?Sized, F, E>(orig: RefMut<'a, T>, f: F) -> Result<RefMut<'a, U>, E>
+    where
+        F: FnOnce(&mut T) -> Result<&mut U, E>,
+    {
         // Avoid decrementing the borrow flag on Drop.
         let mut orig = ManuallyDrop::new(orig);
+        let value = f(&mut *orig)?;
 
-        RefMut {
-            value: NonNull::from(f(&mut *orig)),
+        Ok(RefMut {
+            value: NonNull::from(value),
             state: orig.state,
             borrow_bitmask: orig.borrow_bitmask,
             marker: PhantomData,
-        }
+        })
     }
 
     /// Filters and maps a mutable reference to a new type.

@@ -91,6 +91,17 @@ pub enum ProgramError {
     IncorrectAuthority,
 }
 
+#[cfg(feature = "std")]
+impl core::fmt::Display for ProgramError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ProgramError {}
+// TODO: Replace with core import when we bump rust version
+
 /// Builtin return values occupy the upper 32 bits
 const BUILTIN_BIT_SHIFT: usize = 32;
 macro_rules! to_builtin {

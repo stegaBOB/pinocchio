@@ -194,7 +194,7 @@ macro_rules! align_pointer {
     ($ptr:ident) => {
         // integer-to-pointer cast: the resulting pointer will have the same provenance as
         // the original pointer and it follows the alignment requirement for the input.
-        (($ptr as usize + (BPF_ALIGN_OF_U128 - 1)) & !(BPF_ALIGN_OF_U128 - 1)) as *mut u8
+        $ptr.with_addr(($ptr as usize + (BPF_ALIGN_OF_U128 - 1)) & !(BPF_ALIGN_OF_U128 - 1))
     };
 }
 
@@ -684,8 +684,9 @@ unsafe impl GlobalAlloc for NoAllocator {
     }
 }
 
-#[cfg(all(test, not(target_os = "solana")))]
-mod tests {
+#[cfg(any(test, not(target_os = "solana")))]
+#[allow(unused)]
+pub mod tests {
     extern crate std;
 
     use core::{alloc::Layout, ptr::copy_nonoverlapping};
@@ -700,10 +701,11 @@ mod tests {
     const MOCK_PROGRAM_ID: Pubkey = [5u8; 32];
 
     /// An uninitialized account info.
-    const UNINIT: MaybeUninit<AccountInfo> = MaybeUninit::<AccountInfo>::uninit();
+    pub const UNINIT: MaybeUninit<AccountInfo> = MaybeUninit::<AccountInfo>::uninit();
 
     /// Struct representing a memory region with a specific alignment.
-    struct AlignedMemory {
+    #[derive(Debug)]
+    pub struct AlignedMemory {
         ptr: *mut u8,
         layout: Layout,
     }
@@ -753,7 +755,7 @@ mod tests {
     /// # Safety
     ///
     /// The returned `AlignedMemory` should only be used within the test context.
-    unsafe fn create_input(accounts: usize, instruction_data: &[u8]) -> AlignedMemory {
+    pub unsafe fn create_input(accounts: usize, instruction_data: &[u8]) -> AlignedMemory {
         let mut input = AlignedMemory::new(1_000_000_000);
         // Number of accounts.
         input.write(&(accounts as u64).to_le_bytes(), 0);
